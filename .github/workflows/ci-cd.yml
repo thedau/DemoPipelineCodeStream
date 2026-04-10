@@ -157,7 +157,7 @@ jobs:
           DEPLOY_ENV: staging
 
       - name: UAT notification
-        run: echo "UAT Notification: Staging deploy completed, waiting for business confirmation."
+        run: 'echo "UAT Notification: Staging deploy completed, waiting for business confirmation."'
 
       - name: Upload staging deploy log
         uses: actions/upload-artifact@v4
