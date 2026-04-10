@@ -1,13 +1,13 @@
-# CodeStream CI/CD Demo (GitLab)
+# CodeStream CI/CD Demo (GitHub Actions)
 
-Demo nay mo phong bai toan cua doi phat trien CodeStream: thay vi build, test, deploy thu cong, toan bo quy trinh duoc tu dong hoa bang GitLab CI/CD.
+Demo nay mo phong bai toan cua doi phat trien CodeStream: thay vi build, test, deploy thu cong, toan bo quy trinh duoc tu dong hoa bang GitHub Actions.
 
 ## 1. Muc tieu demo
 
-- Tu dong lint va test khi tao Merge Request.
+- Tu dong lint va test khi tao Pull Request.
 - Tu dong build artifact sau khi test pass.
 - Tu dong deploy mock len staging khi merge vao nhanh `main`.
-- Co buoc deploy production dang `manual` khi tao tag.
+- Co buoc deploy production theo tag va co them manual deploy tren UI GitHub.
 
 ## 2. Cau truc nhanh
 
@@ -15,28 +15,33 @@ Demo nay mo phong bai toan cua doi phat trien CodeStream: thay vi build, test, d
 - `tests/`: unit/integration test voi Jest + Supertest.
 - `scripts/build.js`: tao build artifact (`dist/build-info.json`).
 - `scripts/deploy.js`: mock deploy, tao log (`dist/deploy-log.json`).
-- `.gitlab-ci.yml`: pipeline chinh cho GitLab.
+- `.github/workflows/ci-cd.yml`: workflow chinh cho GitHub Actions.
 
-## 3. Cac stage trong GitLab CI/CD
+## 3. Cac stage trong GitHub Actions
 
 1. `lint`: kiem tra chat luong code.
 2. `test`: chay test va xuat bao cao JUnit.
 3. `build`: tao artifact de su dung cho deploy.
-4. `deploy`: deploy mock.
+4. `deploy_staging`: deploy mock khi push vao `main`.
+5. `deploy_production_tag`: deploy mock khi push tag bat dau bang `v`.
+6. `deploy_manual`: deploy thu cong tu tab Actions.
 
 ## 4. Luong trinh dien de tai
 
-1. Day code len GitLab.
+1. Day code len GitHub.
 2. Tao nhanh moi, sua nho 1 dong code, push len remote.
-3. Tao Merge Request:
-   - GitLab tu chay `lint`, `test`, `build`.
-   - Vao tab pipeline de xem tung job.
+3. Tao Pull Request:
+   - GitHub Actions tu chay `lint`, `test`, `build`.
+   - Vao tab Actions de xem tung job.
 4. Merge vao `main`:
-   - Job `deploy_staging_job` chay tu dong.
+   - Job `deploy_staging` chay tu dong.
    - Kiem tra artifact `dist/deploy-log.json`.
 5. Tao 1 tag (vi du `v1.0.0`):
-   - Job `deploy_production_manual` xuat hien.
-   - Bam Run de demo co phe duyet thu cong truoc khi deploy production.
+   - Job `deploy_production_tag` chay tu dong.
+
+6. Neu muon demo manual:
+   - Vao tab Actions > `CodeStream CI/CD` > `Run workflow`.
+   - Chon `deploy_environment` va bam Run.
 
 ## 5. Chay local de test truoc khi push
 
