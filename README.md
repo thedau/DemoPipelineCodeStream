@@ -1,75 +1,94 @@
 # CodeStream CI/CD Demo (GitHub Actions)
 
-Demo nay mo phong bai toan cua doi phat trien CodeStream: thay vi build, test, deploy thu cong, toan bo quy trinh duoc tu dong hoa bang GitHub Actions.
+Tài liệu này mô phỏng đúng bài toán trong báo cáo: đội CodeStream đang build, kiểm thử và triển khai thủ công; mục tiêu là chuẩn hóa thành quy trình CI/CD tự động, có kiểm soát chất lượng, bảo mật, staging, production và rollback.
 
-## 1. Muc tieu demo
+## 1. Mục tiêu của demo
 
-- Tu dong lint va test khi tao Pull Request.
-- Tu dong build artifact sau khi test pass.
-- Tu dong deploy mock len staging khi merge vao nhanh `main`.
-- Co buoc deploy production theo tag va co them manual deploy tren UI GitHub.
+- Tự động hóa luồng từ commit đến triển khai.
+- Giảm lỗi thao tác thủ công khi build/test/deploy.
+- Bổ sung bước đệm Staging trước khi lên Production.
+- Có kiểm thử bảo mật và cơ chế rollback khi triển khai lỗi.
 
-## 2. Cau truc nhanh
+## 2. Cấu trúc dự án
 
-- `src/`: ung dung Express mau.
-- `tests/`: unit/integration test voi Jest + Supertest.
-- `scripts/build.js`: tao build artifact (`dist/build-info.json`).
-- `scripts/deploy.js`: mock deploy, tao log (`dist/deploy-log.json`).
-- `.github/workflows/ci-cd.yml`: workflow chinh cho GitHub Actions.
+- `src/`: Ứng dụng Express mẫu.
+- `tests/`: Unit test và API test bằng Jest + Supertest.
+- `scripts/build.js`: Tạo artifact `dist/build-info.json`.
+- `scripts/deploy.js`: Deploy mô phỏng và ghi log `dist/deploy-log.json`.
+- `scripts/rollback.js`: Rollback mô phỏng và ghi log `dist/rollback-log.json`.
+- `.github/workflows/ci-cd.yml`: Pipeline GitHub Actions.
 
-## 3. Pipeline dai va chi tiet (GitHub Actions)
+## 3. Pipeline chi tiết theo báo cáo
 
-Workflow duoc chia thanh nhieu job co quan he `needs`, phu hop de thuyet trinh kien truc CI/CD theo chuan doanh nghiep:
+Pipeline được thiết kế theo 3 giai đoạn giống nội dung báo cáo dự án.
 
-1. `static_checks`: lint code.
-2. `unit_tests`: chay test + xuat JUnit + coverage artifact.
-3. `dependency_audit`: kiem tra bao mat dependency production (`npm audit`).
-4. `integration_api_checks`: khoi dong app va smoke test API bang curl.
-5. `build_artifacts`: tao build artifact `dist/build-info.json`.
-6. `docker_validation`: build Docker image de xac nhan kha nang dong goi.
-7. `deploy_staging`: deploy mock khi merge/push vao `main`.
-8. `verify_staging`: verify sau deploy staging.
-9. `deploy_production_tag`: deploy mock production khi push tag `v*`.
-10. `deploy_manual`: deploy thu cong tu UI Actions.
-11. `pipeline_summary`: tong hop ket qua tat ca job vao Step Summary.
+### Giai đoạn 1: Tự động hóa Build và kiểm thử
 
-## 4. Luong trinh dien de tai
+1. `stage1_ci_build_test`
+- Lint code.
+- Chạy unit test + coverage.
+- Build artifact.
+- Lưu JUnit report, coverage report và build artifact.
 
-1. Day code len GitHub.
-2. Tao nhanh moi, sua nho 1 dong code, push len remote.
-3. Tao Pull Request:
-   - GitHub Actions tu chay chuoi quality va security (`static_checks`, `unit_tests`, `dependency_audit`, `integration_api_checks`, `build_artifacts`, `docker_validation`).
-   - Vao tab Actions de xem tung job.
-4. Merge vao `main`:
-   - Job `deploy_staging` va `verify_staging` chay tu dong.
-   - Kiem tra artifact `dist/deploy-log.json`.
-5. Tao 1 tag (vi du `v1.0.0`):
-   - Job `deploy_production_tag` chay tu dong.
+2. `stage1_security_checks`
+- Chạy `npm audit` cho dependency production.
+- Quét secret bằng Gitleaks.
 
-6. Neu muon demo manual:
-   - Vao tab Actions > `CodeStream CI/CD` > `Run workflow`.
-   - Chon `deploy_environment` va bam Run.
+3. `stage1_integration_test`
+- Khởi động app tạm thời.
+- Smoke test các API chính (`/health`, `/api/v1/message`).
 
-## 5. Chay local de test truoc khi push
+### Giai đoạn 2: Triển khai Staging và xác nhận
+
+4. `stage2_deploy_staging`
+- Chạy khi push vào `main`.
+- Deploy mock lên Staging.
+- Ghi artifact deploy log.
+- Tạo thông báo UAT (mô phỏng).
+
+5. `stage2_verify_staging`
+- Bước xác nhận sau triển khai Staging.
+
+### Giai đoạn 3: Triển khai Production và rollback
+
+6. `stage3_deploy_production`
+- Chạy khi push tag bắt đầu bằng `v` (ví dụ `v1.0.0`).
+- Deploy mock lên Production.
+
+7. `stage3_rollback_if_failed`
+- Chỉ chạy khi deploy production thất bại.
+- Thực thi rollback mock và lưu rollback log.
+
+### Bổ sung cho vận hành
+
+8. `manual_deploy`
+- Cho phép chạy thủ công từ tab Actions.
+
+9. `pipeline_summary`
+- Tổng hợp trạng thái tất cả job vào Step Summary.
+
+## 4. Cách chạy demo khi báo cáo
+
+1. Tạo Pull Request vào `main` để trình bày giai đoạn 1.
+2. Merge PR để kích hoạt giai đoạn 2 (deploy staging).
+3. Tạo tag `v1.0.0` để kích hoạt giai đoạn 3 (deploy production).
+4. Nếu cần demo sự cố, mô phỏng lỗi deploy để trình bày rollback.
+5. Mở tab Actions để giải thích đồ thị phụ thuộc giữa các job (`needs`).
+
+## 5. Chạy kiểm tra tại máy local
 
 ```bash
 npm ci
 npm run lint
-npm run test
+npm run test:coverage
 npm run build
 npm run deploy:mock
+npm run deploy:rollback
 ```
 
-## 6. Gia tri cho "khach hang" (doi dev CodeStream)
+## 6. Giá trị mang lại cho đội CodeStream
 
-- Giam loi thao tac thu cong.
-- Co feedback nhanh tren Merge Request.
-- Tieu chuan hoa quy trinh release.
-- Tang toc do dua tinh nang moi ra san pham.
-
-## 7. Mo rong de tai (neu muon)
-
-- Them quality gate coverage toi thieu (vi du >= 80%).
-- Day Docker image len registry (GHCR, Docker Hub).
-- Deploy that len Kubernetes/VM thay cho mock deploy.
-- Them thong bao Slack/Teams khi pipeline fail.
+- Chuẩn hóa quy trình từ commit đến production.
+- Có phản hồi nhanh cho lập trình viên qua pipeline tự động.
+- Giảm rủi ro release nhờ Staging và rollback.
+- Dễ mở rộng thêm quality gate, thông báo Slack/Teams và triển khai thực tế.

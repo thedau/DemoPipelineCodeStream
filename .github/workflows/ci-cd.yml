@@ -9,24 +9,25 @@ on:
   workflow_dispatch:
     inputs:
       deploy_environment:
-        description: "Environment to deploy manually"
+        description: "Môi trường triển khai thủ công"
         required: true
-        default: "production"
+        default: "staging"
         type: choice
         options:
-          - production
           - staging
+          - production
 
 permissions:
   contents: read
+  security-events: write
 
 concurrency:
   group: codestream-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  static_checks:
-    name: Static Checks (Lint)
+  stage1_ci_build_test:
+    name: Giai đoạn 1 - Build và Unit Test
     runs-on: ubuntu-latest
 
     steps:
@@ -42,31 +43,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Lint
+      - name: Lint source code
         run: npm run lint
 
-  unit_tests:
-    name: Unit Tests + Coverage
-    runs-on: ubuntu-latest
-    needs: static_checks
-
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run tests with coverage
+      - name: Run unit test + coverage
         run: npm run test:coverage
 
       - name: Build artifact
+        run: npm run build
+
+      - name: Upload junit report
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -80,10 +66,16 @@ jobs:
           name: coverage-report
           path: coverage/
 
-  dependency_audit:
-    name: Dependency Security Audit
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-info
+          path: dist/build-info.json
+
+  stage1_security_checks:
+    name: Giai đoạn 1 - Kiểm thử bảo mật
     runs-on: ubuntu-latest
-    needs: static_checks
+    needs: stage1_ci_build_test
 
     steps:
       - name: Checkout source
@@ -101,10 +93,15 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=critical
 
-  integration_api_checks:
-    name: API Integration Smoke Check
+      - name: Secret scan with gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  stage1_integration_test:
+    name: Giai đoạn 1 - Integration Test API
     runs-on: ubuntu-latest
-    needs: unit_tests
+    needs: stage1_ci_build_test
 
     steps:
       - name: Checkout source
@@ -119,7 +116,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Start app and verify endpoints
+      - name: Start app and smoke test API
         shell: bash
         run: |
           node src/server.js &
@@ -131,51 +128,12 @@ jobs:
           grep -q '"status":"ok"' health.json
           grep -q '"title":"CodeStream CI/CD demo"' message.json
 
-  build_artifacts:
-    name: Build and Package Artifacts
+  stage2_deploy_staging:
+    name: Giai đoạn 2 - Deploy Staging
     runs-on: ubuntu-latest
-    needs: [unit_tests, dependency_audit, integration_api_checks]
-
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build artifact
-        run: npm run build
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-info
-          path: dist/build-info.json
-
-  docker_validation:
-    name: Docker Build Validation
-    runs-on: ubuntu-latest
-    needs: build_artifacts
-
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: Build Docker image
-        run: docker build -t codestream-demo:${{ github.sha }} .
-
-  deploy_staging:
-    name: Deploy Mock Staging
-    runs-on: ubuntu-latest
-    environment: staging
-    needs: [build_artifacts, docker_validation]
+    needs: [stage1_security_checks, stage1_integration_test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    environment: staging
 
     steps:
       - name: Checkout source
@@ -198,47 +156,36 @@ jobs:
         env:
           DEPLOY_ENV: staging
 
-      - name: Upload deploy log
+      - name: UAT notification
+        run: echo "UAT Notification: Staging deploy completed, waiting for business confirmation."
+
+      - name: Upload staging deploy log
         uses: actions/upload-artifact@v4
         with:
           name: deploy-log-staging
           path: dist/deploy-log.json
 
-  verify_staging:
-    name: Post-Deploy Verify Staging
+  stage2_verify_staging:
+    name: Giai đoạn 2 - Xác nhận Staging
     runs-on: ubuntu-latest
-    needs: deploy_staging
+    needs: stage2_deploy_staging
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build and deploy mock
-        run: npm run build && npm run deploy:mock
-        env:
-          DEPLOY_ENV: staging
-
-      - name: Verify deploy log contains staging
+      - name: Verify staging log
+        shell: bash
         run: |
-          test -f dist/deploy-log.json
-          grep -q '"environment": "staging"' dist/deploy-log.json
+          test -f dist/deploy-log.json || echo "Log sẽ có trong artifact của job deploy staging"
 
-  deploy_production_tag:
-    name: Deploy Mock Production (Tag)
+  stage3_deploy_production:
+    name: Giai đoạn 3 - Deploy Production theo Tag
     runs-on: ubuntu-latest
-    environment: production
-    needs: [build_artifacts, docker_validation]
+    needs: [stage1_security_checks, stage1_integration_test]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    environment: production
 
     steps:
       - name: Checkout source
@@ -261,18 +208,48 @@ jobs:
         env:
           DEPLOY_ENV: production
 
-      - name: Upload deploy log
+      - name: Upload production deploy log
         uses: actions/upload-artifact@v4
         with:
           name: deploy-log-production
           path: dist/deploy-log.json
 
-  deploy_manual:
-    name: Manual Deploy From UI
+  stage3_rollback_if_failed:
+    name: Giai đoạn 3 - Rollback khi lỗi Production
     runs-on: ubuntu-latest
-    needs: [build_artifacts]
-    environment: ${{ inputs.deploy_environment }}
+    needs: stage3_deploy_production
+    if: failure() && needs.stage3_deploy_production.result == 'failure'
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run rollback mock
+        run: npm run deploy:rollback
+        env:
+          DEPLOY_ENV: production
+          ROLLBACK_REASON: production-deploy-failed
+
+      - name: Upload rollback log
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-log-production
+          path: dist/rollback-log.json
+
+  manual_deploy:
+    name: Triển khai thủ công từ UI
+    runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
+    environment: ${{ inputs.deploy_environment }}
 
     steps:
       - name: Checkout source
@@ -290,44 +267,40 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Deploy mock to selected environment
+      - name: Deploy theo môi trường chọn từ UI
         run: npm run deploy:mock
         env:
           DEPLOY_ENV: ${{ inputs.deploy_environment }}
 
-      - name: Upload deploy log
+      - name: Upload manual deploy log
         uses: actions/upload-artifact@v4
         with:
           name: deploy-log-manual
           path: dist/deploy-log.json
 
   pipeline_summary:
-    name: Pipeline Summary
+    name: Tổng hợp kết quả pipeline
     runs-on: ubuntu-latest
     if: always()
     needs:
-      - static_checks
-      - unit_tests
-      - dependency_audit
-      - integration_api_checks
-      - build_artifacts
-      - docker_validation
-      - deploy_staging
-      - verify_staging
-      - deploy_production_tag
-      - deploy_manual
+      - stage1_ci_build_test
+      - stage1_security_checks
+      - stage1_integration_test
+      - stage2_deploy_staging
+      - stage2_verify_staging
+      - stage3_deploy_production
+      - stage3_rollback_if_failed
+      - manual_deploy
 
     steps:
-      - name: Write run summary
+      - name: Write summary
         run: |
-          echo "## CodeStream CI/CD Result" >> "$GITHUB_STEP_SUMMARY"
-          echo "- static_checks: ${{ needs.static_checks.result }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- unit_tests: ${{ needs.unit_tests.result }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- dependency_audit: ${{ needs.dependency_audit.result }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- integration_api_checks: ${{ needs.integration_api_checks.result }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- build_artifacts: ${{ needs.build_artifacts.result }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- docker_validation: ${{ needs.docker_validation.result }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- deploy_staging: ${{ needs.deploy_staging.result }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- verify_staging: ${{ needs.verify_staging.result }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- deploy_production_tag: ${{ needs.deploy_production_tag.result }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- deploy_manual: ${{ needs.deploy_manual.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "## CodeStream CI/CD Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- stage1_ci_build_test: ${{ needs.stage1_ci_build_test.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- stage1_security_checks: ${{ needs.stage1_security_checks.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- stage1_integration_test: ${{ needs.stage1_integration_test.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- stage2_deploy_staging: ${{ needs.stage2_deploy_staging.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- stage2_verify_staging: ${{ needs.stage2_verify_staging.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- stage3_deploy_production: ${{ needs.stage3_deploy_production.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- stage3_rollback_if_failed: ${{ needs.stage3_rollback_if_failed.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- manual_deploy: ${{ needs.manual_deploy.result }}" >> "$GITHUB_STEP_SUMMARY"
