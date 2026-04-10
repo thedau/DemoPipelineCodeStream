@@ -13,6 +13,7 @@ app.get("/health", (_req, res) => {
 
 app.get("/api/v1/message", (_req, res) => {
   res.status(200).json({
+    version: "1.0.0",
     title: "CodeStream CI/CD demo",
     message: "Pipeline is running automatically"
   });

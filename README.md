@@ -38,6 +38,11 @@ Demo nay mo phong bai toan cua doi phat trien CodeStream: thay vi build, test, d
    - Job `deploy_production_manual` xuat hien.
    - Bam Run de demo co phe duyet thu cong truoc khi deploy production.
 
+### Nhanh cho buoi demo
+
+- Nhanh MR mau: `feature/gitlab-mr-demo`
+- Tag release mau: `v1.0.0`
+
 ## 5. Chay local de test truoc khi push
 
 ```bash
