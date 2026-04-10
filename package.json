@@ -8,6 +8,7 @@
     "lint": "eslint .",
     "test": "jest --runInBand",
     "test:ci": "jest --runInBand --ci --reporters=default --reporters=jest-junit",
+    "test:coverage": "jest --runInBand --ci --coverage --reporters=default --reporters=jest-junit",
     "build": "node scripts/build.js",
     "deploy:mock": "node scripts/deploy.js",
     "ci": "npm run lint && npm run test && npm run build"

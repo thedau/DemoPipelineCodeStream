@@ -17,9 +17,16 @@ on:
           - production
           - staging
 
+permissions:
+  contents: read
+
+concurrency:
+  group: codestream-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  ci:
-    name: Lint, Test, Build
+  static_checks:
+    name: Static Checks (Lint)
     runs-on: ubuntu-latest
 
     steps:
@@ -38,18 +45,112 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Test (CI mode)
-        run: npm run test:ci
+  unit_tests:
+    name: Unit Tests + Coverage
+    runs-on: ubuntu-latest
+    needs: static_checks
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests with coverage
+        run: npm run test:coverage
 
       - name: Build artifact
-        run: npm run build
-
-      - name: Upload test report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: junit-report
           path: junit.xml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+
+  dependency_audit:
+    name: Dependency Security Audit
+    runs-on: ubuntu-latest
+    needs: static_checks
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=critical
+
+  integration_api_checks:
+    name: API Integration Smoke Check
+    runs-on: ubuntu-latest
+    needs: unit_tests
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Start app and verify endpoints
+        shell: bash
+        run: |
+          node src/server.js &
+          APP_PID=$!
+          trap "kill $APP_PID" EXIT
+          sleep 3
+          curl --fail http://127.0.0.1:3000/health | tee health.json
+          curl --fail http://127.0.0.1:3000/api/v1/message | tee message.json
+          grep -q '"status":"ok"' health.json
+          grep -q '"title":"CodeStream CI/CD demo"' message.json
+
+  build_artifacts:
+    name: Build and Package Artifacts
+    runs-on: ubuntu-latest
+    needs: [unit_tests, dependency_audit, integration_api_checks]
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build artifact
+        run: npm run build
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -57,10 +158,23 @@ jobs:
           name: build-info
           path: dist/build-info.json
 
+  docker_validation:
+    name: Docker Build Validation
+    runs-on: ubuntu-latest
+    needs: build_artifacts
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t codestream-demo:${{ github.sha }} .
+
   deploy_staging:
     name: Deploy Mock Staging
     runs-on: ubuntu-latest
-    needs: ci
+    environment: staging
+    needs: [build_artifacts, docker_validation]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
@@ -90,10 +204,40 @@ jobs:
           name: deploy-log-staging
           path: dist/deploy-log.json
 
+  verify_staging:
+    name: Post-Deploy Verify Staging
+    runs-on: ubuntu-latest
+    needs: deploy_staging
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and deploy mock
+        run: npm run build && npm run deploy:mock
+        env:
+          DEPLOY_ENV: staging
+
+      - name: Verify deploy log contains staging
+        run: |
+          test -f dist/deploy-log.json
+          grep -q '"environment": "staging"' dist/deploy-log.json
+
   deploy_production_tag:
     name: Deploy Mock Production (Tag)
     runs-on: ubuntu-latest
-    needs: ci
+    environment: production
+    needs: [build_artifacts, docker_validation]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
 
     steps:
@@ -126,6 +270,8 @@ jobs:
   deploy_manual:
     name: Manual Deploy From UI
     runs-on: ubuntu-latest
+    needs: [build_artifacts]
+    environment: ${{ inputs.deploy_environment }}
     if: github.event_name == 'workflow_dispatch'
 
     steps:
@@ -154,3 +300,34 @@ jobs:
         with:
           name: deploy-log-manual
           path: dist/deploy-log.json
+
+  pipeline_summary:
+    name: Pipeline Summary
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - static_checks
+      - unit_tests
+      - dependency_audit
+      - integration_api_checks
+      - build_artifacts
+      - docker_validation
+      - deploy_staging
+      - verify_staging
+      - deploy_production_tag
+      - deploy_manual
+
+    steps:
+      - name: Write run summary
+        run: |
+          echo "## CodeStream CI/CD Result" >> "$GITHUB_STEP_SUMMARY"
+          echo "- static_checks: ${{ needs.static_checks.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- unit_tests: ${{ needs.unit_tests.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- dependency_audit: ${{ needs.dependency_audit.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- integration_api_checks: ${{ needs.integration_api_checks.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- build_artifacts: ${{ needs.build_artifacts.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- docker_validation: ${{ needs.docker_validation.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- deploy_staging: ${{ needs.deploy_staging.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- verify_staging: ${{ needs.verify_staging.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- deploy_production_tag: ${{ needs.deploy_production_tag.result }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- deploy_manual: ${{ needs.deploy_manual.result }}" >> "$GITHUB_STEP_SUMMARY"
