@@ -1,0 +1,9 @@
+version: "3.9"
+services:
+  codestream:
+    build: .
+    container_name: codestream-demo
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000

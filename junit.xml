@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="jest tests" tests="2" failures="0" errors="0" time="0.927">
+  <testsuite name="CodeStream API" errors="0" failures="0" skipped="0" timestamp="2026-04-10T07:16:44" time="0.882" tests="2">
+    <testcase classname="CodeStream API GET /health returns service status" name="CodeStream API GET /health returns service status" time="0.02">
+    </testcase>
+    <testcase classname="CodeStream API GET /api/v1/message returns CI/CD message" name="CodeStream API GET /api/v1/message returns CI/CD message" time="0.006">
+    </testcase>
+  </testsuite>
+</testsuites>
