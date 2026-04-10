@@ -203,6 +203,10 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Simulate production failure for rollback demo
+        if: contains(github.ref_name, 'rollback')
+        run: exit 1
+
       - name: Deploy mock to production
         run: npm run deploy:mock
         env:
